@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `lastError`) instead of sitting silently `DISCONNECTED` forever.
 - **BullMQ webhook jobs are auto-evicted** (`removeOnComplete`/`removeOnFail` retention) so completed/failed
   job payloads no longer accumulate unbounded in Redis (audit M19).
+- **Engine-event handlers no longer risk unhandled promise rejections.** Webhook dispatch is now
+  self-contained (a failed webhook lookup is logged and swallowed, not rejected into the fire-and-forget
+  callers), the `onMessage`/`onMessageCreate` hook chains carry a `.catch()`, and a process-level
+  `unhandledRejection` backstop logs (instead of crashing) anything that still slips through. A transient
+  DB hiccup on the busy message path can no longer drop the event silently or take the process down.
+- **Audit-log writes are best-effort.** A failed audit insert is logged and swallowed instead of turning
+  an otherwise-successful operation (create/delete/start/stop session, etc.) into a `500`.
 
 ## [0.2.8] - 2026-06-17
 
