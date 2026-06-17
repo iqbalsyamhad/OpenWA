@@ -357,11 +357,14 @@ export class PluginLoaderService implements OnModuleInit {
       },
       messages: {
         sendText: async (sessionId, chatId, text) => {
-          this.assertSessionAllowed(plugin.manifest, sessionId);
+          // Validate scope + that the session has a live engine BEFORE MessageService persists a
+          // pending row: a dead/unstarted session must fail with PluginCapabilityError, not a raw
+          // TypeError + orphaned row. resolveEngine also runs assertSessionAllowed.
+          this.resolveEngine(plugin.manifest, sessionId);
           return this.getMessageService().sendText(sessionId, { chatId, text });
         },
         reply: async (sessionId, chatId, quotedMessageId, text) => {
-          this.assertSessionAllowed(plugin.manifest, sessionId);
+          this.resolveEngine(plugin.manifest, sessionId);
           return this.getMessageService().reply(sessionId, { chatId, quotedMessageId, text });
         },
       } satisfies PluginMessagingCapability,

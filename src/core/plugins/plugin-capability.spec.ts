@@ -29,6 +29,7 @@ function makePlugin(sessions?: string[]): PluginInstance {
 describe('PluginLoaderService capability facade — ctx.messages', () => {
   let loader: PluginLoaderService;
   let messageService: { sendText: jest.Mock; reply: jest.Mock };
+  let sessionService: { getEngine: jest.Mock };
   let moduleRef: { get: jest.Mock };
 
   beforeEach(() => {
@@ -36,7 +37,12 @@ describe('PluginLoaderService capability facade — ctx.messages', () => {
       sendText: jest.fn().mockResolvedValue({ messageId: 'wamid', timestamp: 1 }),
       reply: jest.fn().mockResolvedValue({ messageId: 'wamid', timestamp: 1 }),
     };
-    moduleRef = { get: jest.fn().mockReturnValue(messageService) };
+    sessionService = { getEngine: jest.fn().mockReturnValue({}) }; // truthy live engine
+    moduleRef = {
+      get: jest
+        .fn()
+        .mockImplementation((token: unknown) => (token === SessionService ? sessionService : messageService)),
+    };
     const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
     const pluginStorage = {
       createPluginStorage: jest.fn().mockReturnValue({}),
@@ -85,6 +91,13 @@ describe('PluginLoaderService capability facade — ctx.messages', () => {
       PluginCapabilityError,
     );
     expect(moduleRef.get).not.toHaveBeenCalled();
+    expect(messageService.sendText).not.toHaveBeenCalled();
+  });
+
+  it('rejects sendText with PluginCapabilityError when the session has no active engine', async () => {
+    sessionService.getEngine.mockReturnValue(undefined);
+    const ctx = contextFor(makePlugin(['*']));
+    await expect(ctx.messages.sendText('dead-session', '628@c.us', 'hi')).rejects.toBeInstanceOf(PluginCapabilityError);
     expect(messageService.sendText).not.toHaveBeenCalled();
   });
 });
