@@ -10,6 +10,9 @@ import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
+import { evaluateFilters } from './filters/filter-evaluator';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { userPart } from '../../engine/identity/wa-id';
 import {
   assertSafeFetchUrl,
   withSafeFetch,
@@ -49,6 +52,8 @@ export class WebhookService {
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
+    @Optional()
     @InjectQueue(QUEUE_NAMES.WEBHOOK)
     private readonly webhookQueue?: Queue<WebhookJobData>,
   ) {
@@ -80,6 +85,7 @@ export class WebhookService {
       events: dto.events || ['message.received'],
       secret: dto.secret || null,
       headers: dto.headers || {},
+      filters: dto.filters ?? null,
       retryCount: dto.retryCount ?? 3,
     });
 
@@ -125,6 +131,7 @@ export class WebhookService {
     // not a stored blank that silently disables signing while looking configured.
     if (dto.secret !== undefined) webhook.secret = dto.secret || null;
     if (dto.headers !== undefined) webhook.headers = dto.headers;
+    if (dto.filters !== undefined) webhook.filters = dto.filters;
     if (dto.active !== undefined) webhook.active = dto.active;
     if (dto.retryCount !== undefined) webhook.retryCount = dto.retryCount;
 
@@ -205,7 +212,12 @@ export class WebhookService {
       return;
     }
 
-    const matchingWebhooks = webhooks.filter(w => w.events.includes(event) || w.events.includes('*'));
+    // Resolve a lid actor to its phone through the persistent table so a phone filter matches a
+    // lid-addressed sender (e.g. an unresolved @lid group participant). Absent store -> no resolution.
+    const resolveLid = (jid: string): string | null => this.lidMappingStore?.getCached(userPart(jid)) ?? null;
+    const matchingWebhooks = webhooks.filter(
+      w => (w.events.includes(event) || w.events.includes('*')) && evaluateFilters(w.filters, event, data, resolveLid),
+    );
 
     // Generate idempotency key (same for all webhooks receiving this event). occurredAt is captured
     // once here and reused for every retry of this dispatch, so recurring lifecycle events get a

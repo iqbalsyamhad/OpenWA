@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "Conexión con el servidor perdida",
+      "message": "No se puede acceder al servidor backend. Comprueba si el servidor está en ejecución."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "API de WhatsApp",
@@ -270,6 +276,36 @@
     "events": "Eventos",
     "available": "Eventos disponibles",
     "saveChanges": "Guardar cambios",
+    "filters": {
+      "title": "Filtros (opcional)",
+      "hint": "Activar solo cuando se cumplan todas las condiciones. Se aplica a eventos de mensajes.",
+      "badge": "{{count}} filtro",
+      "badge_other": "{{count}} filtros",
+      "addCondition": "Añadir condición",
+      "removeCondition": "Eliminar condición",
+      "caseSensitive": "Distinguir mayúsculas",
+      "contactPlaceholder": "Número o ID de WhatsApp...",
+      "textPlaceholder": "Texto a buscar...",
+      "addValue": "Añadir \"{{value}}\"",
+      "yes": "Sí",
+      "no": "No",
+      "fields": {
+        "sender": "Remitente",
+        "recipient": "Destinatario",
+        "body": "Cuerpo del mensaje",
+        "type": "Tipo de mensaje",
+        "isGroup": "Es chat de grupo",
+        "fromMe": "Enviado por mí",
+        "hasMedia": "Tiene multimedia",
+        "mentions": "Menciones"
+      },
+      "operators": {
+        "is": "es",
+        "isNot": "no es",
+        "contains": "contiene",
+        "equals": "es igual a"
+      }
+    },
     "columns": {
       "url": "URL",
       "events": "Eventos",

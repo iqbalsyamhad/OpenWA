@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "فُقد الاتصال بالخادم",
+      "message": "تعذّر الوصول إلى الخادم الخلفي. يرجى التحقق مما إذا كان الخادم قيد التشغيل."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "واجهة برمجة واتساب",
@@ -270,6 +276,36 @@
     "events": "الأحداث",
     "available": "الأحداث المتاحة",
     "saveChanges": "حفظ التغييرات",
+    "filters": {
+      "title": "عوامل التصفية (اختياري)",
+      "hint": "يتم التفعيل فقط عند تطابق جميع الشروط. ينطبق على أحداث الرسائل.",
+      "badge": "{{count}} عامل تصفية",
+      "badge_other": "{{count}} عوامل تصفية",
+      "addCondition": "إضافة شرط",
+      "removeCondition": "إزالة الشرط",
+      "caseSensitive": "حساس لحالة الأحرف",
+      "contactPlaceholder": "رقم أو معرّف واتساب...",
+      "textPlaceholder": "نص للمطابقة...",
+      "addValue": "إضافة \"{{value}}\"",
+      "yes": "نعم",
+      "no": "لا",
+      "fields": {
+        "sender": "المُرسِل",
+        "recipient": "المُستلِم",
+        "body": "نص الرسالة",
+        "type": "نوع الرسالة",
+        "isGroup": "محادثة جماعية",
+        "fromMe": "مُرسَلة مني",
+        "hasMedia": "تحتوي على وسائط",
+        "mentions": "الإشارات"
+      },
+      "operators": {
+        "is": "هو",
+        "isNot": "ليس",
+        "contains": "يحتوي على",
+        "equals": "يساوي"
+      }
+    },
     "columns": {
       "url": "الرابط",
       "events": "الأحداث",

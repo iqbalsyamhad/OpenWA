@@ -38,11 +38,25 @@ export interface SessionStats {
   memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
 }
 
+export type WebhookFilterOperator = 'is' | 'isNot' | 'contains' | 'equals';
+
+export interface WebhookFilterCondition {
+  field: string;
+  operator: WebhookFilterOperator;
+  value: string | string[] | boolean;
+  caseSensitive?: boolean;
+}
+
+export interface WebhookFilters {
+  conditions: WebhookFilterCondition[];
+}
+
 export interface Webhook {
   id: string;
   sessionId: string;
   url: string;
   events: string[];
+  filters?: WebhookFilters | null;
   active: boolean;
   secret?: string;
   createdAt: string;
@@ -291,7 +305,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
+    // On a non-JSON body (e.g. a reverse-proxy 502/503 HTML page) fall through to `HTTP <status>`
+    // rather than statusText: the status code is what the toast connection-lost de-dup matches on,
+    // and statusText is empty over HTTP/2 anyway.
+    const error = await response.json().catch(() => ({}));
     throw new Error(error.message || `HTTP ${response.status}`);
   }
 
@@ -342,7 +359,7 @@ export const webhookApi = {
   listBySession: (sessionId: string) => request<Webhook[]>(`/sessions/${sessionId}/webhooks`),
   listAll: () => request<Webhook[]>('/webhooks'),
   get: (sessionId: string, id: string) => request<Webhook>(`/sessions/${sessionId}/webhooks/${id}`),
-  create: (sessionId: string, data: { url: string; events: string[] }) =>
+  create: (sessionId: string, data: { url: string; events: string[]; filters?: WebhookFilters | null }) =>
     request<Webhook>(`/sessions/${sessionId}/webhooks`, {
       method: 'POST',
       body: JSON.stringify(data),

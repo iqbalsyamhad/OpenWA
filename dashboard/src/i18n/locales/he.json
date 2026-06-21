@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "החיבור לשרת אבד",
+      "message": "לא ניתן להגיע לשרת העורפי. אנא בדקו אם השרת פועל."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "ממשק WhatsApp API",
@@ -270,6 +276,36 @@
     "events": "אירועים",
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
+    "filters": {
+      "title": "מסננים (אופציונלי)",
+      "hint": "הפעלה רק כאשר כל התנאים מתקיימים. חל על אירועי הודעות.",
+      "badge": "{{count}} מסנן",
+      "badge_other": "{{count}} מסננים",
+      "addCondition": "הוספת תנאי",
+      "removeCondition": "הסרת תנאי",
+      "caseSensitive": "תלוי רישיות",
+      "contactPlaceholder": "מספר או מזהה WhatsApp...",
+      "textPlaceholder": "טקסט להתאמה...",
+      "addValue": "הוספת \"{{value}}\"",
+      "yes": "כן",
+      "no": "לא",
+      "fields": {
+        "sender": "שולח",
+        "recipient": "נמען",
+        "body": "גוף ההודעה",
+        "type": "סוג הודעה",
+        "isGroup": "צ'אט קבוצתי",
+        "fromMe": "נשלח על ידי",
+        "hasMedia": "מכיל מדיה",
+        "mentions": "אזכורים"
+      },
+      "operators": {
+        "is": "הוא",
+        "isNot": "אינו",
+        "contains": "מכיל",
+        "equals": "שווה ל"
+      }
+    },
     "columns": {
       "url": "כתובת URL",
       "events": "אירועים",

@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-06-21
+
+A maintenance release — no breaking changes; everything is a fix or internal hardening.
+**Reliability:** the configurable whatsapp-web.js first-boot timeout (`WWEBJS_AUTH_TIMEOUT_MS`) now
+actually takes effect in Docker (it was never forwarded into the container) and is validated as a safe
+integer; the dashboard now collapses duplicate connection-lost toasts during a reverse-proxy outage.
+**Resource limits:** outbound base64 media is now size-capped (`413` when too large) on a par with the
+remote-URL and inbound media caps, and bulk-send media payloads are validated as typed objects.
+**Release & tooling:** a published GitHub Release now waits for the container image build, and the data
+migration CLI is scoped to the data-owned tables. Note: bulk-send media validation is now stricter — a
+bulk request carrying unknown or malformed fields inside a media object is now rejected with `400`.
+
+### Changed
+
+- **A published GitHub Release now waits for the container image build.** The release workflow's
+  GitHub Release job now depends on the Docker image job, so a `v*` tag can no longer publish release
+  notes without a matching multi-arch image on GHCR. A failed image build leaves the tag without a
+  Release until the workflow is re-run. (#389)
+- **The data migration CLI is scoped to the data-owned tables.** `data-source.ts` (used by
+  `migration:generate` / `migration:run`) now lists only the data connection's entities
+  (session/webhook/message/template/engine), mirroring the runtime data connection, instead of a
+  broad glob that also pulled in the main-owned `api_keys`/`audit_logs` entities. Generating a data
+  migration no longer emits spurious auth/audit DDL into the data database. No runtime or schema
+  change for existing installs. (#391)
+
+### Fixed
+
+- **Dashboard collapses duplicate connection-lost toasts during a reverse-proxy outage.** When the
+  backend is unreachable behind a reverse proxy that returns a non-JSON `502`/`503` page, the
+  dashboard now folds the repeated request failures into a single connection-lost toast instead of
+  stacking ordinary error toasts. The thrown error now always carries the HTTP status code (which the
+  toast de-duplication matches on), rather than a status text that is empty over HTTP/2. (#388)
+- **`WWEBJS_AUTH_TIMEOUT_MS` now takes effect in Docker, and is validated as a safe integer.** The
+  configurable first-boot init timeout added in 0.4.7 was never forwarded into the container by Docker
+  Compose, so setting it in `.env` had no effect on the recommended deployment path — the engine kept
+  the 30000ms default. Both compose files now pass it through (unset still means the default). The
+  value is also validated as a positive safe integer, so an accidental huge or overflowing value falls
+  back to the default instead of making the engine's first-boot wait run effectively unbounded. (#393)
+- **Outbound base64 media is now size-limited.** Sending media as a base64 string (single and bulk
+  sends) was bounded only by the coarse whole-request `BODY_SIZE_LIMIT`, unlike remote-URL and inbound
+  media which already enforce `MEDIA_DOWNLOAD_MAX_BYTES`. The decoded size of an outbound base64 blob
+  is now checked against the same `MEDIA_DOWNLOAD_MAX_BYTES` cap (default 50 MiB) before it is sent or
+  persisted; an oversized blob is rejected with `413 Payload Too Large` (the documented
+  `MESSAGE_MEDIA_TOO_LARGE`). The bulk-send nested media payloads are now validated as typed objects,
+  so unknown or malformed media fields are rejected rather than silently persisted — bulk requests
+  carrying junk inside a media object will now get a `400`. (#394, #395)
+
+## [0.4.7] - 2026-06-21
+
+A webhooks, reliability, and dashboard release — no breaking changes; everything is additive or a
+fix. **Webhooks** gain optional smart pre-dispatch filters: a trigger can carry AND-ed conditions
+(sender/recipient/body/type/mentions/fromMe/hasMedia/isGroup) and fires only when they all match,
+with engine-neutral `WaId` contact matching and a FilterBuilder UI — a webhook with no filters
+behaves exactly as before. The whatsapp-web.js engine's first-boot init timeout is now configurable
+(`WWEBJS_AUTH_TIMEOUT_MS`) for slow environments. **Fixed:** the dashboard no longer crashes on
+PostgreSQL when a webhook exists (a JSON column type mismatch). **Dashboard:** a downed backend no
+longer floods the screen with error toasts.
+
+### Added
+
+- **Smart webhook filters (optional, additive).** A webhook trigger can now carry an optional set of
+  pre-dispatch conditions, evaluated per event before delivery: it fires only when **all** conditions
+  match (AND). Conditions match on `sender` / `recipient` / `body` / `type` / `mentions` / `fromMe` /
+  `hasMedia` / `isGroup` with `is` / `isNot` / `contains` / `equals` operators;
+  message-only conditions are skipped for non-message events, so a `*`-subscribed webhook still fires on
+  session events. A webhook with no filters behaves exactly as before. Contact-id conditions
+  (`sender`/`recipient`/`mentions`) match by the engine-neutral `WaId` key, so a filter written as a
+  plain number or in any dialect (`@c.us` / `@s.whatsapp.net` / `@lid`) matches the same person - and a
+  lid-addressed sender (e.g. an unresolved `@lid` group participant) matches a phone filter once the
+  persistent `lid -> phone` table knows the mapping. Configurable via the API (`filters` on create/update)
+  and a new FilterBuilder UI on the dashboard's Webhooks page. (#379)
+
+- **Configurable first-boot init timeout for the whatsapp-web.js engine (`WWEBJS_AUTH_TIMEOUT_MS`).**
+  On slow first boots (e.g. WSL2 or low-resource containers) the engine's fixed 30s wait for WhatsApp
+  Web to finish loading could expire before the QR code was generated, aborting startup. Set
+  `WWEBJS_AUTH_TIMEOUT_MS` to a larger value in milliseconds (e.g. `120000`) to extend it; unset keeps
+  the previous 30000ms default, so existing deployments are unchanged. (#353)
+
+### Changed
+
+- **Dashboard collapses connection-error spam into a single toast.** When the backend is unreachable
+  (`failed to fetch`, network errors, HTTP 502/503), the dashboard now shows one translated "Server
+  Connection Lost" toast that auto-dismisses, instead of stacking an error toast per failed request —
+  de-duplicated on a stable key so translation can't break it. Original work by @quinton-8. (#293)
+
+### Fixed
+
+- **Dashboard no longer crashes ("Something went wrong") when a webhook exists on PostgreSQL.** JSON
+  columns (`webhooks.events`/`headers`, `sessions.config`, `messages.metadata`, `message_batches.*`)
+  were declared `jsonb` in their entities but created as `text` by the baseline migration, so on
+  Postgres the driver returned them as raw JSON strings and the dashboard's `events.map()` threw an
+  uncaught error. `jsonColumnType()` now resolves to `simple-json` on both dialects (parsed in JS on
+  read) — no schema migration or data conversion, since the write format was already identical. This
+  also corrects the same latent string-instead-of-object behavior for session reconnect config,
+  message-reaction persistence, and bulk-send batches on Postgres. The dashboard additionally
+  normalizes webhook `events` to an array at the query boundary as defense-in-depth. (#385)
+
 ## [0.4.6] - 2026-06-20
 
 A reliability, correctness, and dashboard release. **Identity & engine:** Baileys gains a persistent,
