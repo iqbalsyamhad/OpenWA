@@ -19,11 +19,11 @@ export class AddTemplates1779840000000 implements MigrationInterface {
 
     if (isPostgres) {
       await queryRunner.query(
-        `CREATE TABLE "templates" ("id" varchar PRIMARY KEY NOT NULL DEFAULT gen_random_uuid()::varchar, "sessionId" varchar NOT NULL, "name" varchar(100) NOT NULL, "body" text NOT NULL, "header" text, "footer" text, "createdAt" timestamp NOT NULL DEFAULT NOW(), "updatedAt" timestamp NOT NULL DEFAULT NOW(), CONSTRAINT "FK_templates_sessionId" FOREIGN KEY ("sessionId") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
+        `CREATE TABLE "templates" ("id" varchar PRIMARY KEY NOT NULL DEFAULT gen_random_uuid()::varchar, "sessionId" UUID NOT NULL, "name" varchar(100) NOT NULL, "body" text NOT NULL, "header" text, "footer" text, "createdAt" timestamp NOT NULL DEFAULT NOW(), "updatedAt" timestamp NOT NULL DEFAULT NOW(), CONSTRAINT "FK_templates_sessionId" FOREIGN KEY ("sessionId") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
       );
     } else {
       await queryRunner.query(
-        `CREATE TABLE "templates" ("id" varchar PRIMARY KEY NOT NULL, "sessionId" varchar NOT NULL, "name" varchar(100) NOT NULL, "body" text NOT NULL, "header" text, "footer" text, "createdAt" datetime NOT NULL DEFAULT (datetime('now')), "updatedAt" datetime NOT NULL DEFAULT (datetime('now')), CONSTRAINT "FK_templates_sessionId" FOREIGN KEY ("sessionId") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
+        `CREATE TABLE "templates" ("id" varchar PRIMARY KEY NOT NULL, "sessionId" UUID NOT NULL, "name" varchar(100) NOT NULL, "body" text NOT NULL, "header" text, "footer" text, "createdAt" datetime NOT NULL DEFAULT (datetime('now')), "updatedAt" datetime NOT NULL DEFAULT (datetime('now')), CONSTRAINT "FK_templates_sessionId" FOREIGN KEY ("sessionId") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
       );
     }
 

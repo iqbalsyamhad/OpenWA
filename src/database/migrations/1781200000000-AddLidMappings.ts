@@ -14,11 +14,11 @@ export class AddLidMappings1781200000000 implements MigrationInterface {
 
     if (isPostgres) {
       await queryRunner.query(
-        `CREATE TABLE "lid_mappings" ("lid" varchar PRIMARY KEY NOT NULL, "phone" varchar, "sessionId" varchar, "updatedAt" timestamp NOT NULL DEFAULT NOW())`,
+        `CREATE TABLE "lid_mappings" ("lid" varchar PRIMARY KEY NOT NULL, "phone" varchar, "sessionId" UUID, "updatedAt" timestamp NOT NULL DEFAULT NOW())`,
       );
     } else {
       await queryRunner.query(
-        `CREATE TABLE "lid_mappings" ("lid" varchar PRIMARY KEY NOT NULL, "phone" varchar, "sessionId" varchar, "updatedAt" datetime NOT NULL DEFAULT (datetime('now')))`,
+        `CREATE TABLE "lid_mappings" ("lid" varchar PRIMARY KEY NOT NULL, "phone" varchar, "sessionId" UUID, "updatedAt" datetime NOT NULL DEFAULT (datetime('now')))`,
       );
     }
 
