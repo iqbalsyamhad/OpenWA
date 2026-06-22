@@ -14,7 +14,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: openwa-api
+    container_name: newopenwa-api
     # Container hardening (finding H7) — same posture as production (same Dockerfile/entrypoint).
     security_opt:
       - 'no-new-privileges:true'
@@ -34,6 +34,8 @@ services:
     ports:
       # Bind to localhost by default; set BIND_HOST=0.0.0.0 in .env to reach it from another host.
       - '${BIND_HOST:-127.0.0.1}:2785:2785'
+    env_file:
+      - .env
     environment:
       - PORT=2785
       - HOME=/tmp
@@ -64,6 +66,8 @@ services:
       - openwa-network
     security_opt:
       - 'no-new-privileges:true'
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
       # M16: no committed default secret. Empty unless the operator sets it; the postgres
@@ -93,6 +97,8 @@ services:
     security_opt:
       - 'no-new-privileges:true'
     command: server /data --console-address ":9001"
+    env_file:
+      - .env
     environment:
       # M16: no committed default creds. MinIO refuses to start with empty root creds
       # (clear fail-fast); the app's production boot guard rejects empty/placeholder secrets.
