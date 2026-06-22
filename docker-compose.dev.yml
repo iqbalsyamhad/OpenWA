@@ -53,6 +53,63 @@ services:
   # The dashboard SPA is bundled into the image and served by NestJS on the same port:
   # open http://localhost:2785 — there is no separate dashboard container.
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: openwa-postgres
+    profiles: ['postgres', 'full']
+    restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
+    environment:
+      POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
+      # M16: no committed default secret. Empty unless the operator sets it; the postgres
+      # image refuses to initialize with an empty password (clear fail-fast), and the app's
+      # production boot guard rejects empty/placeholder secrets before startup.
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-}
+      POSTGRES_DB: ${DATABASE_NAME:-openwa}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DATABASE_USERNAME:-openwa}']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    labels:
+      - 'com.openwa.service=database'
+      - 'com.openwa.builtin=true'
+
+  # ===== OPTIONAL: Built-in MinIO (S3-compatible) =====
+  minio:
+    image: minio/minio
+    container_name: openwa-minio
+    profiles: ['minio', 'full']
+    restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
+    command: server /data --console-address ":9001"
+    environment:
+      # M16: no committed default creds. MinIO refuses to start with empty root creds
+      # (clear fail-fast); the app's production boot guard rejects empty/placeholder secrets.
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-}
+    volumes:
+      - minio-data:/data
+    ports:
+      - '127.0.0.1:9000:9000'
+      - '127.0.0.1:9001:9001'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      - 'com.openwa.service=storage'
+      - 'com.openwa.builtin=true'
+
 networks:
   default:
     name: openwa-network
