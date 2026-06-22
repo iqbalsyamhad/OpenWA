@@ -30,7 +30,7 @@ services:
     tmpfs:
       - /tmp
     pids_limit: 512
-    mem_limit: ${OPENWA_MEM_LIMIT:-2g}
+    # mem_limit: ${OPENWA_MEM_LIMIT:-2g}
     ports:
       # Bind to localhost by default; set BIND_HOST=0.0.0.0 in .env to reach it from another host.
       - '${BIND_HOST:-127.0.0.1}:2785:2785'
