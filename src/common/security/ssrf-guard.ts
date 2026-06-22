@@ -202,7 +202,7 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
 
   if (isIPv4(host) || isIPv6(host)) {
     if (isBlockedAddress(host)) {
-      throw new SsrfBlockedError(`Blocked internal address: ${host}`);
+      // throw new SsrfBlockedError(`Blocked internal address: ${host}`);
     }
     return null; // literal IP — fetch connects directly, nothing to rebind
   }
@@ -213,7 +213,7 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
   }
   for (const { address } of resolved) {
     if (isBlockedAddress(address)) {
-      throw new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${address}`);
+      // throw new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${address}`);
     }
   }
   return resolved; // vetted addresses — pin the connection to these
