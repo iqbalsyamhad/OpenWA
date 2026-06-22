@@ -533,6 +533,79 @@ describe('SessionService', () => {
     });
   });
 
+  // ── engine-identity guard: stale-callback isolation ───────────────
+  // A callback can fire after its engine was torn down (post-stop) or after a newer engine
+  // replaced it for the same id (post-restart / reconnect). Such a stale callback must not
+  // mutate the session that now belongs to a different (or no) engine.
+  describe('stale engine callback isolation', () => {
+    const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
+
+    const startAndCapture = async (): Promise<EngineEventCallbacks> => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const calls = mockEngine.initialize.mock.calls as [EngineEventCallbacks][];
+      return calls[0][0];
+    };
+
+    it('lets the live engine drive status (guard is a no-op for the active engine)', async () => {
+      const callbacks = await startAndCapture();
+      (repository.update as jest.Mock).mockClear();
+
+      callbacks.onReady?.('628123', 'Tester');
+
+      expect(repository.update).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ status: SessionStatus.READY }),
+      );
+    });
+
+    it('ignores onReady from an engine that was torn down (post-stop window)', async () => {
+      const callbacks = await startAndCapture();
+      enginesOf().delete('sess-uuid-1'); // stop()/forceKill() removes the engine from the live map
+      (repository.update as jest.Mock).mockClear();
+
+      callbacks.onReady?.('628123', 'Tester');
+
+      expect(repository.update).not.toHaveBeenCalled();
+    });
+
+    it('ignores onDisconnected from a superseded engine after restart (stale generation)', async () => {
+      const callbacks = await startAndCapture(); // engine A captured
+      enginesOf().set('sess-uuid-1', { marker: 'engine-B' }); // a newer engine now owns the id
+      (repository.update as jest.Mock).mockClear();
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      callbacks.onDisconnected?.('socket closed');
+
+      expect(repository.update).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('ignores onMessage from a superseded engine (no persist, no webhook)', async () => {
+      const callbacks = await startAndCapture();
+      enginesOf().set('sess-uuid-1', { marker: 'engine-B' });
+      (messageRepository.save as jest.Mock).mockClear();
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      callbacks.onMessage?.({
+        id: 'wa-1',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        chatId: 'peer@c.us',
+        body: 'hi',
+        type: 'text',
+        timestamp: 1,
+        fromMe: false,
+        isGroup: false,
+      });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(messageRepository.save).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
   // ── engine message-event webhook dispatch ─────────────────────────
 
   describe('engine message-event webhook dispatch', () => {
@@ -1149,11 +1222,87 @@ describe('SessionService', () => {
       expect(result).toEqual(chats);
     });
 
+    it('caps an unbounded chat list at the default limit (1000), most-recent first', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+
+      const chats = Array.from({ length: 1500 }, (_, i) => ({
+        id: `${i}@c.us`,
+        name: `c${i}`,
+        isGroup: false,
+        unreadCount: 0,
+        timestamp: i,
+      }));
+      mockEngine.getChats.mockResolvedValue(chats);
+
+      const result = await service.getChats('sess-uuid-1');
+      expect(result).toHaveLength(1000);
+      expect(result[0].timestamp).toBe(1499); // sorted timestamp DESC before capping
+      expect(result[999].timestamp).toBe(500);
+    });
+
+    it('applies limit/offset to the chat list', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+
+      const chats = Array.from({ length: 50 }, (_, i) => ({
+        id: `${i}@c.us`,
+        name: `c${i}`,
+        isGroup: false,
+        unreadCount: 0,
+        timestamp: i,
+      }));
+      mockEngine.getChats.mockResolvedValue(chats);
+
+      const result = await service.getChats('sess-uuid-1', { limit: 5, offset: 0 });
+      expect(result).toHaveLength(5);
+      expect(result[0].timestamp).toBe(49); // most-recent first
+    });
+
     it('should throw BadRequestException when session is not started', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
       await expect(service.getChats('sess-uuid-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('getGroups pagination', () => {
+    it('caps an unbounded group list at the default limit (1000)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+
+      const groups = Array.from({ length: 1500 }, (_, i) => ({ id: `g${i}`, name: `G${i}` }));
+      mockEngine.getGroups.mockResolvedValue(groups);
+
+      const result = await service.getGroups('sess-uuid-1');
+      expect(result).toHaveLength(1000);
+    });
+  });
+
+  describe('start() concurrent stop/delete guard', () => {
+    it('tears down the just-initialized engine if a stop/delete lands during start() (no resurrection to READY)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // Simulate a concurrent stop()/delete() landing WHILE engine.initialize() is in flight.
+      mockEngine.initialize.mockImplementationOnce(() => {
+        (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions.add('sess-uuid-1');
+        return Promise.resolve();
+      });
+
+      await service.start('sess-uuid-1');
+
+      // The engine registered during init must be torn down + removed, not left READY.
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(service.getEngine('sess-uuid-1')).toBeUndefined();
     });
   });
 

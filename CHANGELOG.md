@@ -7,6 +7,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Plugins page: the "Active" state and the Enable/Activate actions were all the same green and hard to tell apart. Actions are now a solid green button and the current state a neutral chip. (#417)
+
+## [0.5.1] - 2026-06-22
+
+A small correctness & consistency patch — **no breaking changes**. Session engine callbacks no longer
+mutate a session after it has been stopped or its engine replaced; bulk-message variables now use the
+same `{{name}}` syntax as message templates (single-brace `{name}` deprecated but still honored); and
+a plugin's declared capability permissions are now actually enforced at the capability boundary.
+
+### Changed
+
+- **Plugin capability permissions are now enforced.** A plugin may use a capability — `ctx.messages.*`
+  (send/reply) or `ctx.engine.*` (read-only group/contact/chat queries) — only if its manifest
+  declares the matching permission (`messages:send` / `engine:read`); a plugin that doesn't declare
+  it, or declares none, is denied with a clear `PluginCapabilityError`. Previously `manifest.permissions`
+  was advisory and unenforced. The built-in extensions declare exactly what they use (auto-reply:
+  `messages:send`; translation: `messages:send` + `engine:read`) and are unaffected; custom plugins
+  must declare the permissions for the capabilities they call. (#412)
+- **Bulk-message variable substitution now uses the same `{{name}}` syntax as message templates.**
+  `POST /sessions/:id/messages/send-bulk` previously substituted `messages[].variables` with a
+  single-brace `{name}` convention, inconsistent with the double-brace `{{name}}` used everywhere
+  else in the gateway. Bulk content is now rendered by the shared template helper, so the canonical
+  `{{name}}` placeholders work in bulk content. Existing single-brace `{name}` content keeps working
+  unchanged. (#69, #411)
+
+### Deprecated
+
+- **Single-brace `{name}` placeholders in bulk-message content.** Prefer `{{name}}`; the legacy
+  `{name}` form is still substituted for backward compatibility but may be removed in a future major
+  version. (#69, #411)
+
+### Fixed
+
+- **A session is no longer mutated by callbacks from an engine it has already replaced or torn
+  down.** Each engine's lifecycle/message callbacks (QR, ready, disconnect, state, ack, message,
+  reaction, …) now no-op once that engine is no longer the live one for the session. This closes a
+  race where a late callback from a stopped engine — or from a previous engine after a
+  restart/reconnect — could write a stale status (e.g. flip a stopped session back to `ready`),
+  schedule a reconnect for a session meant to be down, or persist a stray message/ack against the
+  wrong engine generation. The guard is a no-op for the live engine and for ordinary network-drop
+  reconnects. (#410)
+
+## [0.5.0] - 2026-06-21
+
+A security & reliability hardening release. **One behavior change** (the reason for the minor bump):
+the contact / group / chat list endpoints now paginate with a default cap of 1000 items — opt into
+`limit`/`offset`; accounts with fewer than 1000 items are unaffected. Everything else is hardening and
+correctness: time-bounded SSRF DNS resolution, validated webhook custom headers (blocks CR/LF
+injection), Swagger off by default in production, boot-time validation of numeric env vars and of a
+SQLite data/main path collision, plugin reads gated to ADMIN, a session-scoped key no longer denied on
+non-session routes, no resurrection of a session stopped mid-startup, a hardened dashboard config-save
+path (browser-flag parsing + `0600` secret file), and cleaner fresh-install schema.
+
+### Changed
+
+- **The contact, group, and chat list endpoints are now paginated (default cap 1000).** ⚠️ Behavior
+  change. `GET /sessions/:id/contacts`, `/groups`, and `/chats` previously serialized the operator's
+  *entire* address book / group / chat set into one response — a heap/GC hazard for very large
+  accounts. They now accept optional `limit` (clamped `[1, 1000]`) and `offset` query params, and
+  default to returning at most **1000** items when no `limit` is given. Accounts under 1000 items are
+  unaffected; larger accounts page with `offset`. Chats are returned **most-recent first**, so a
+  capped response is the newest chats rather than an arbitrary slice. In-process callers (plugins
+  using the engine directly) still receive the full set. (#401)
+- **Fresh databases no longer create the unused `api_keys`/`audit_logs` tables on the data
+  connection.** Those auth/audit tables belong solely to the separate "main" SQLite connection, but
+  the data-connection baseline migration also created them (with a stale `keyPrefix` width), leaving
+  dead, unused tables on the data database. New installs are now clean. Existing installs are
+  unaffected — an already-applied migration is never re-run, so their harmless leftover tables remain
+  and no destructive drop is performed. (#400)
+
+### Fixed
+
+- **Browser launch flags saved from the dashboard are now applied correctly.** The Infrastructure
+  form persists the Puppeteer/Chromium arguments space-separated, but the engine config parser only
+  split on commas — collapsing every flag into a single malformed argv token, so `--no-sandbox` (and
+  any other flag) was silently never applied. In a hardened/containerized environment that can wedge
+  session startup. The parser now accepts either delimiter, and an already-saved space-separated value
+  is repaired on the next boot. (#397)
+- **A session-restricted API key is no longer wrongly denied on non-session routes.** The guard
+  derived the session for a key's `allowedSessions` scope from the `:id` route param, but `:id` is
+  also the resource id on unrelated routes (e.g. `auth/api-keys/:id`, `plugins/:id`) — so a
+  session-scoped key got a spurious `401` there. Session scoping is now applied only where `:id`
+  actually denotes a session; enforcement on the real `sessions/:id/...` routes is unchanged. (#398)
+- **Boot is now rejected when the SQLite `DATABASE_NAME` collides with the internal main database
+  file.** The auth/audit ("main") and application ("data") connections must be separate SQLite files;
+  pointing `DATABASE_NAME` at `./data/main.sqlite` ran two connections — each with its own migration
+  ledger and synchronize policy — against one file, risking schema divergence and lock contention.
+  Startup validation now fails fast with a clear message (paths are normalized, so relative spellings
+  of the same file are caught). Postgres is unaffected (its `DATABASE_NAME` is a bare db name). (#399)
+- **Numeric environment variables are validated at boot.** The rate-limit windows/limits, webhook
+  timeout/retry settings, and the database pool size were parsed with an unbounded `parseInt`; a
+  non-integer value (e.g. `RATE_LIMIT_SHORT_LIMIT=abc`) became `NaN` and silently disabled the
+  corresponding limit. Startup now rejects a non-negative-integer violation with a clear message,
+  consistent with the existing port validation. (#402)
+- **The whatsapp-web.js engine now detects remote media URLs case-insensitively.** A media `data`
+  string was treated as a URL only with a lowercase `http://`/`https://` prefix, so a mixed-case
+  scheme (e.g. `HTTPS://…`) was mistaken for base64 instead of being fetched through the SSRF-guarded
+  path — diverging from the Baileys engine. Both engines now use the same case-insensitive check. (#404)
+- **A session stopped or deleted mid-startup is no longer resurrected to `READY`.** If `stop`/`delete`
+  landed while `start()` was awaiting the engine's `initialize()`, the freshly-created engine was left
+  registered and running. `start()` now re-checks the stopping flag after initialization and tears the
+  engine down (mirroring the existing reconnect guard), so a concurrent stop/delete wins. (#405)
+
+### Security
+
+- **DNS resolution in the SSRF guard is now bounded by a deadline.** The guard resolved a hostname
+  with an unbounded lookup, so a hanging or very slow resolver could pin a worker indefinitely. The
+  lookup now races a deadline (default 10s, overridable via `SSRF_DNS_TIMEOUT_MS`) and fails closed
+  with a clear error on expiry. Healthy resolvers are unaffected. (#404)
+- **Custom webhook headers are now validated as a flat, control-character-free string map.** The
+  `headers` field accepted any object shape with no per-value checks, so a value containing `CR`/`LF`
+  could attempt header injection into the outbound webhook request, and non-string values silently
+  broke delivery. Creation/update now reject invalid header names, non-string or control-character
+  values, and over-large maps (max 50 entries, value max 1024 chars). The delivery-time reserved-name
+  filter is unchanged. (#403)
+- **Swagger UI (`/api/docs`) now defaults OFF in production.** The interactive API schema was served
+  unauthenticated by default everywhere; it is reconnaissance surface. It remains on outside
+  production and can be re-enabled in production with `ENABLE_SWAGGER=true` (and is still disabled
+  anywhere with `ENABLE_SWAGGER=false`). The startup banner only advertises the docs URL when it is
+  actually served. (#402)
+- **Plugin inventory, detail, and health reads now require the ADMIN role.** `GET /plugins`,
+  `GET /plugins/:id`, and `GET /plugins/:id/health` were readable by any authenticated key (including
+  the read-only VIEWER role), exposing installed plugin versions, non-secret configuration, and
+  health/error text. They now require ADMIN, matching the plugin write routes and the infrastructure
+  endpoints. (Secret config values were — and remain — redacted regardless.) (#398)
+- **The dashboard-generated env file is now written owner-only (`0600`).** Saving Infrastructure
+  configuration wrote `data/.env.generated` — which can hold the database, S3, and Redis credentials —
+  with default permissions (world-readable `0644`) until the next restart re-tightened it. It is now
+  written `0600` at save time through the same owner-only helper used for the generated env at first
+  boot, closing the exposure window on shared or bind-mounted hosts. (#397)
+
 ## [0.4.8] - 2026-06-21
 
 A maintenance release — no breaking changes; everything is a fix or internal hardening.

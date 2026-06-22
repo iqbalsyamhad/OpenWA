@@ -13,6 +13,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { paginate, ListOptions } from '../../common/utils/paginate';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -401,10 +402,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
 
       await this.initializeEngine(id, session);
+
+      // A stop()/delete() may have landed while we awaited engine.initialize() — if so, tear down the
+      // engine we just registered so the session isn't resurrected to READY (mirrors the post-init
+      // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
+      if (this.stoppingSessions.has(id)) {
+        const resurrected = this.engines.get(id);
+        if (resurrected) {
+          await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
+          this.engines.delete(id);
+        }
+      }
       return this.findOne(id);
     } finally {
       this.initializingSessions.delete(id);
     }
+  }
+
+  /**
+   * True only while `engine` is still the live engine registered for `id`. Each callback below
+   * captures its own engine instance; once the session is stopped (engine removed from the map) or
+   * restarted/reconnected (engine replaced), a late callback from the superseded engine must not
+   * mutate the session that now belongs to a different — or no — engine. `this.engines` is the
+   * single source of truth for the active engine, so identity comparison closes both the
+   * post-stop and the stale-generation (stop→start / reconnect-replace) windows the one-shot
+   * post-init guard does not cover.
+   */
+  private isLiveEngine(id: string, engine: IWhatsAppEngine): boolean {
+    return this.engines.get(id) === engine;
   }
 
   private async initializeEngine(id: string, session: Session): Promise<void> {
@@ -430,6 +455,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     await engine.initialize({
       onQRCode: (qr: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.log('QR code generated', {
           sessionId: id,
           action: 'qr_generated',
@@ -450,6 +476,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         void this.updateStatus(id, SessionStatus.QR_READY);
       },
       onReady: (phone: string, pushName: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.log(`Session ready: ${phone}`, {
           sessionId: id,
           phone,
@@ -485,6 +512,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
       },
       onMessage: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         // Status/Story posts arrive via the inbound path for some engines; don't persist or webhook them.
         // Mirrors the isStatusBroadcast guard in onMessageCreate below.
         if (message.isStatusBroadcast) {
@@ -557,6 +585,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           .catch(err => this.logger.error(`onMessage handler failed for ${id}`, String(err)));
       },
       onMessageCreate: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         // `message_create` fires for every message the account creates, including sends composed on a
         // linked phone — which the `message`/`onMessage` event never delivers. Incoming messages are
         // already handled by `onMessage`, so only outgoing (`fromMe`) ones produce `message.sent` here.
@@ -605,6 +634,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           .catch(err => this.logger.error(`onMessageCreate handler failed for ${id}`, String(err)));
       },
       onMessageAck: (messageId, status: DeliveryStatus): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message ack: ${messageId} -> ${status}`, {
           sessionId: id,
           messageId,
@@ -685,6 +715,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       },
       onMessageRevoked: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message revoked: ${message.id}`, {
           sessionId: id,
           messageId: message.id,
@@ -707,6 +738,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.eventsGateway.emitMessageRevoked(id, revokedPayload);
       },
       onMessageReaction: (event): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message reaction received: ${event.messageId} -> ${event.reaction}`, {
           sessionId: id,
           messageId: event.messageId,
@@ -727,6 +759,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
       },
       onDisconnected: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.warn(`Session disconnected: ${reason}`, {
           sessionId: id,
           reason,
@@ -751,6 +784,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.scheduleReconnect(id, session);
       },
       onStateChanged: (engineState: EngineStatus): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         const statusMap: Record<EngineStatus, SessionStatus> = {
           [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
           [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
@@ -765,6 +799,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       },
       onError: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.error(`Session engine failed: ${reason}`, undefined, {
           sessionId: id,
           reason,
@@ -1032,7 +1067,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return phone;
   }
 
-  async getGroups(id: string): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
+  async getGroups(
+    id: string,
+    opts: ListOptions = {},
+  ): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
 
@@ -1041,14 +1079,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     const groups = await engine.getGroups();
-    return groups.map(g => ({
+    const mapped = groups.map(g => ({
       id: g.id,
       name: g.name,
       linkedParentJID: g.linkedParentJID,
     }));
+    return paginate(mapped, opts.limit, opts.offset);
   }
 
-  async getChats(id: string): Promise<ChatSummary[]> {
+  async getChats(id: string, opts: ListOptions = {}): Promise<ChatSummary[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
 
@@ -1056,7 +1095,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw new BadRequestException('Session is not started');
     }
 
-    return engine.getChats();
+    // Most-recent first, then bound the response window. Sorting before the cap means a capped
+    // response is the N newest chats (what clients show first) rather than an arbitrary slice.
+    const chats = [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return paginate(chats, opts.limit, opts.offset);
   }
 
   async sendSeen(id: string, chatId: string): Promise<boolean> {

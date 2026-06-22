@@ -752,7 +752,7 @@ POST /api/sessions/:sessionId/messages/send-bulk
       "chatId": "628123456789@c.us",
       "type": "text",
       "content": {
-        "text": "Hello {name}!"
+        "text": "Hello {{name}}!"
       },
       "variables": {
         "name": "John"
@@ -763,7 +763,7 @@ POST /api/sessions/:sessionId/messages/send-bulk
       "type": "image",
       "content": {
         "image": { "url": "https://example.com/promo.jpg" },
-        "caption": "Special offer for {name}!"
+        "caption": "Special offer for {{name}}!"
       },
       "variables": {
         "name": "Jane"
@@ -787,7 +787,7 @@ POST /api/sessions/:sessionId/messages/send-bulk
 | `messages[].chatId` | string | Yes | Recipient chat ID |
 | `messages[].type` | string | Yes | Message type: `text`, `image`, `video`, `audio`, `document` |
 | `messages[].content` | object | Yes | Message content based on type |
-| `messages[].variables` | object | No | Variables for template substitution |
+| `messages[].variables` | object | No | Variables substituted into `content` strings. Use canonical `{{name}}` placeholders (consistent with message templates); the legacy single-brace `{name}` is deprecated but still honored. Unknown placeholders are left literal. |
 | `options.delayBetweenMessages` | number | No | Delay in ms (default: 3000, min: 1000) |
 | `options.randomizeDelay` | boolean | No | Add random 0-2s to delay (default: true) |
 | `options.stopOnError` | boolean | No | Stop batch on first error (default: false) |
@@ -1049,6 +1049,8 @@ DELETE /api/sessions/:sessionId/templates/:id
 GET /api/sessions/:sessionId/contacts
 ```
 
+**Query parameters (optional):** `limit` — max items to return, clamped to `[1, 1000]` (default `1000`); `offset` — items to skip, for paging.
+
 **Response (200 OK):**
 ```json
 [
@@ -1132,6 +1134,8 @@ To get this resolved automatically on each incoming message instead of calling t
 ```http
 GET /api/sessions/:sessionId/groups
 ```
+
+**Query parameters (optional):** `limit` — max items to return, clamped to `[1, 1000]` (default `1000`); `offset` — items to skip, for paging.
 
 **Response (200 OK):**
 ```json
