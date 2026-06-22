@@ -236,7 +236,7 @@
       "stop": "Ferma",
       "reconnect": "Riconnetti",
       "delete": "Elimina",
-      "killStuck": "Kill Stuck"
+      "killStuck": "Termina sessione bloccata"
     },
     "toasts": {
       "readyTitle": "Sessione Pronta",

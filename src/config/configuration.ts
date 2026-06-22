@@ -21,7 +21,9 @@ export default () => ({
   // Main Database configuration (always SQLite for boot config)
   database: {
     type: 'sqlite' as const,
-    database: './data/main.sqlite',
+    // SQLite file for the auth/audit DB. Overridable (e.g. e2e points it at a temp file) so tests
+    // never write api keys into the developer's ./data/main.sqlite.
+    database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
     // Schema management for the auth/audit DB. Default ON (zero-config first boot).
     // Set MAIN_DATABASE_SYNCHRONIZE=false to manage schema via the main-owned migrations
     // instead (migrationsRun then creates api_keys/audit_logs). When disabled, run the
@@ -60,7 +62,10 @@ export default () => ({
     type: process.env.ENGINE_TYPE || 'whatsapp-web.js',
     puppeteer: {
       headless: process.env.PUPPETEER_HEADLESS !== 'false',
-      args: (process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox').split(','),
+      // Accept either delimiter: .env/compose use commas, the dashboard Infrastructure form
+      // persists space-separated. Splitting on both keeps each flag a discrete argv token —
+      // a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox.
+      args: (process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox').split(/[\s,]+/).filter(Boolean),
       // Optional path to a system Chromium/Chrome binary. When unset, whatsapp-web.js
       // uses Puppeteer's bundled Chromium. Required on hosts where the bundled binary
       // is missing or incompatible (Alpine, ARM, custom base images).
