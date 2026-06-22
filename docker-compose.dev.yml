@@ -41,7 +41,7 @@ services:
       - XDG_CACHE_HOME=/tmp/.cache
       - QUEUE_ENABLED=false
     volumes:
-      - ./data:/app/data
+      - openwa-data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
@@ -49,6 +49,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - openwa-network
 
   # The dashboard SPA is bundled into the image and served by NestJS on the same port:
   # open http://localhost:2785 — there is no separate dashboard container.
@@ -110,6 +112,14 @@ services:
       - 'com.openwa.service=storage'
       - 'com.openwa.builtin=true'
 
+volumes:
+  openwa-data:
+    driver: local
+  postgres-data:
+    driver: local
+  minio-data:
+    driver: local
+
 networks:
-  default:
+  openwa-network:
     name: openwa-network
