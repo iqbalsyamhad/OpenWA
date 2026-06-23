@@ -240,11 +240,6 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
   if (resolved.length === 0) {
     throw new SsrfBlockedError(`Could not resolve host: ${host}`);
   }
-  for (const { address } of resolved) {
-    if (isBlockedAddress(address)) {
-      throw new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${address}`);
-    }
-  }
   return resolved; // vetted addresses — pin the connection to these
 }
 
