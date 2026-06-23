@@ -256,6 +256,18 @@ export class SessionController {
     return { success };
   }
 
+  @Post(':id/chats/unread')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Mark a chat as unread' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Chat marked as unread successfully' })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async markChatUnread(@Param('id') id: string, @Body() dto: MarkChatReadDto): Promise<{ success: boolean }> {
+    const success = await this.sessionService.markUnread(id, dto.chatId);
+    return { success };
+  }
+
   @Post(':id/chats/delete')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Delete a chat from the chat list (e.g. a group you have left)' })
@@ -287,7 +299,7 @@ export class SessionController {
     status: 200,
     description: 'Session statistics including counts and memory usage',
   })
-  async getStats(): Promise<{
+  async getStats(@CurrentApiKey() apiKey?: ApiKey): Promise<{
     total: number;
     active: number;
     ready: number;
@@ -295,6 +307,8 @@ export class SessionController {
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    return this.sessionService.getStats();
+    // Scope aggregate stats to the key's allowedSessions so a session-restricted key cannot enumerate
+    // global session counts/status (the route carries no :id for the guard to scope against).
+    return this.sessionService.getStats(apiKey?.allowedSessions);
   }
 }

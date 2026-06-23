@@ -9,7 +9,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sessions (Baileys): when a session is logged out — unlinked from the phone or via the API — the now-invalid on-disk auth state is cleared, so re-linking shows a fresh QR instead of getting stuck silently reloading the dead credentials. (#453 — thanks @ulises2k)
+
+## [0.7.1] - 2026-06-24
+
+### Added
+
+- Dashboard: a **Message Analytics** section — a period selector (24h / 7d / 30d) with messages-over-time, messages-by-type, and top-chats charts, sourced from the existing statistics endpoints. The charting bundle is code-split so it loads only with the Dashboard, not on the login screen.
+- Infrastructure: an **Engine Configuration** tile to pick and configure the active WhatsApp engine (whatsapp-web.js / Baileys), mirroring the Database tile. Selecting an engine persists the choice and applies on restart.
+
+### Changed
+
+- Dashboard: the **Messages Today** card is now populated from real data, and the previously-empty **API Calls** card is replaced with a **Total Messages** metric. The sidebar version is now read live from the backend, so a stale-built bundle no longer shows the wrong version.
+- Plugins: the WhatsApp engine adapters are no longer listed as plugin cards — they are configured under **Infrastructure → Engine**. The Plugins page is now extensions-only.
+- Plugins config dialog: the Configuration/Sessions and install tabs use a cleaner segmented control; the modal caps its height and scrolls its body with a pinned header and footer (Save is always reachable) and is wider for config-heavy plugins.
+- ⚠️ **Deployment:** the bundled docker-compose files no longer pin `ENGINE_TYPE`, so the active engine can be chosen from **Infrastructure → Engine** (persisted to `data/.env.generated`). A real container/host `ENGINE_TYPE` env still takes precedence; leave it unset to let the dashboard control the engine.
+- Docker Compose: the production data-path settings (`SESSION_DATA_PATH`, `STORAGE_LOCAL_PATH`, `PLUGINS_DIR`) and the dev-compose environment are now overridable via `${VAR:-default}` without editing the compose files. (#450, #451 — thanks @MS-Jahan)
+
+### Fixed
+
+- Chats: voice notes and videos now play — the Content-Security-Policy was missing a `media-src` for `data:` URIs, so the browser blocked inline audio/video.
+- Chats: stickers, images, videos and documents loaded from history now render instead of collapsing to an empty timestamp-only bubble (history is fetched with its media payload).
+- Chats: on small screens the conversation back-button icon is now visible (inherited button padding had squeezed it to zero width).
+- Plugins config dialog: radio buttons on the Sessions tab no longer stretch to full width and strand their labels.
+- Infrastructure: the engine status and the engine config form now reflect the real saved headless / session-path / browser-argument values instead of always showing defaults.
+- Docker (production builds): the builder stage now forces `devDependencies` (`npm ci --include=dev`) so `nest build` and the dashboard build no longer fail with `nest: not found` when a PaaS (e.g. Coolify) leaks `NODE_ENV=production` into the image build. (#449 — thanks @MS-Jahan)
+
+## [0.7.0] - 2026-06-23
+
+> **v0.7 — plugin-contract expansion.** Richer plugin config (declarative + sandboxed-iframe editors),
+> per-session activation and config, SSRF-guarded outbound HTTP, and the removal of the bundled
+> reference extensions in favour of the marketplace. ⚠️ See the **Removed** note before upgrading.
+
+### Added
+
+- Plugins: richer **config schema** vocabulary — a `textarea` type, `min`/`max`/`pattern` validation hints, and composite kinds (`items` for arrays, including **array-of-rows** when `items` is an object; `properties` for nested objects; `enum` renders a select). The dashboard config form renders them recursively, and secret redaction/restore now recurses so a `secret` field at any depth is masked on read and preserved on an unchanged write. (#439)
+- Plugins: a plugin may ship a **sandboxed-iframe config editor** via manifest `configUi { entry, height? }`. The host serves the entry over an authenticated `GET /plugins/:id/config-ui` (ADMIN, path/realpath escape-guarded, CSP-sandboxed) and the dashboard injects it as an `srcdoc` into a `sandbox="allow-scripts"` iframe (opaque origin). The editor exchanges config over a `postMessage` bridge — the API key never enters the iframe, and it only ever receives schema-declared, secret-redacted config. (#440)
+- Plugins: **per-session config overrides**. A session-scoped plugin can carry per-session config on top of its base (`'*'`) config via `PUT /plugins/:id/config/:sessionId`; `ctx.config` (read inside a hook) is the override shallow-merged over the base for the firing session, resolved race-safely via `AsyncLocalStorage` for both in-process and sandboxed plugins. Overrides are secret-redacted per slice on the API and survive a restart. (#441)
+- Plugins: per-session activation. A session-scoped plugin can now be activated for all numbers (`*`) or an explicit set of sessions via `PUT /plugins/:id/sessions`, and only receives hook events for the sessions it is active for (enforced at delivery). A plugin declares `sessionScoped` in its manifest (default `true`); a global plugin (`false`, e.g. a metrics logger) always runs. The active set is surfaced on the plugin API and survives a restart. (#438)
+- Plugins: a new `ctx.net.fetch` capability lets a sandboxed plugin make outbound HTTP through the host's SSRF guard (resolve-once-pin, redirects refused), gated by a `net:fetch` permission plus a manifest `net.allow` host allowlist (`host:port`, bare `host`, or `*` for any public host; internal IPs are always blocked). Responses are bounded by a timeout and a streamed size cap. (#437)
+- Chats: opening a conversation now shows its recent history. The dashboard backfills messages directly from WhatsApp when the gateway has none stored yet and merges them with locally-persisted messages, so a freshly connected session shows the conversation instead of an empty thread.
+- Engine (whatsapp-web.js): a reconnect that stalls mid-authentication now self-heals — the stale local auth is cleared and a fresh QR pairing is started — and the WhatsApp Web build can be pinned via `WWEBJS_WEB_VERSION` for environments where the auto-selected build drifts.
+- Dashboard: a searchable plugin catalog, audit-log CSV export across all pages (not just the current view), the running version shown in the sidebar, and an engine-aware engine-configuration dialog (Baileys no longer shows Puppeteer-only fields).
+
+### Changed
+
+- Dashboard, small screens: the chat view is now a single-pane list → conversation flow with a back control instead of a cramped two-pane; page headers place the description directly under the title; and keyboard focus is a consistent, cross-browser, keyboard-only ring. Plus assorted copy and empty-state refinements.
+- Plugins (install): install-from-URL / catalog downloads now follow CDN redirects safely — each hop is re-validated through the SSRF guard — so plugins published on GitHub Releases install correctly.
+
+### Removed
+
+- ⚠️ **Breaking:** the bundled reference extensions `auto-reply` and `translation` have been removed from core. They are superseded by the marketplace plugins **`chat-flow`** (interactive auto-reply) and **`group-translate`** (LibreTranslate group translation), which target the v0.7 contract. **Upgrade:** if you had either enabled, install the replacement from the dashboard (Plugins → Catalog, or `POST /plugins/install-url`) and re-enter its config. The ids `auto-reply` / `translation` remain reserved (an uploaded package can't claim them). Built-in **engines** (whatsapp-web.js, Baileys) are unaffected.
+
+### Fixed
+
+- Plugins: an operator's per-session activation (and now per-session config) was silently dropped from the on-disk registry on the second restart, because the registry entry was rebuilt on each load without carrying those fields. Both are now preserved across restarts. (#441)
+- Docker: the multi-arch image build failed on `linux/arm64` (`Cannot find module lightningcss.linux-arm64-gnu.node`) — the builder stage was QEMU-emulated per target and the emulated arm64 install couldn't fetch lightningcss's (Vite's native CSS minifier) arm64 binary. The builder, which only produces arch-independent artifacts, is now pinned to `$BUILDPLATFORM` so it runs natively; per-arch runtime deps still install in the target-platform stage. Restores `linux/arm64` GHCR publishing.
+- Inbound media is now size-capped before the full attachment is buffered into memory, on both engines, and concurrent inbound media downloads are bounded — lowering peak memory under bursty load.
+- Plugins: composite (object/array) config fields marked `secret` are now fully masked when read back; plugin storage files and directories are created with owner-only permissions; and several runtime robustness fixes (timeout, validation, and error handling) in the sandbox and installer.
+
+### Security
+
+- Session scope is now enforced on the session-statistics overview and on per-session plugin activation, so an API key restricted to specific sessions can no longer read or change state for sessions outside its scope.
+
+## [0.6.2] - 2026-06-23
+
+Plugin platform follow-ups (sandbox hardening, install-from-URL + catalog), a mark-chat-unread
+endpoint, and a batch of correctness/housekeeping fixes.
+
+### Added
+
+- **Install plugins from a URL / catalog.** `POST /plugins/install-url` downloads a plugin `.zip` from an HTTP(S) URL through the SSRF guard (host validated, connection pinned, redirects refused, size-capped) and runs the exact same validate-write-load pipeline as an uploaded package. `GET /plugins/catalog` fetches a configured remote catalog (`PLUGIN_CATALOG_URL`, default the OpenWA-plugins `plugins.json`) and annotates each entry with `installed` / `installedVersion` / `updateAvailable`. The dashboard install modal gains a **Catalog** tab to browse and one-click install. Add a non-public catalog/release host to `SSRF_ALLOWED_HOSTS`. (#433)
+- **Update a plugin in place.** `POST /plugins/:id/update` downloads the new package (same SSRF-guarded path) and swaps it in while **preserving operator config and the enabled state** — it unloads the running plugin (keeping its registry entry, so config survives), writes the new files, reloads, and re-enables if it was enabled. The package id must match; the old version is backed up and restored if the update fails. The dashboard Catalog tab shows an **Update** button when a newer version is available. (#433)
+- Mark a chat as unread: `POST /sessions/:id/chats/unread` (and `sessionApi.markChatUnread` on the dashboard client), the inverse of mark-as-read, supported on both the whatsapp-web.js and Baileys engines. (#432)
+
+### Security
+
+- Untrusted (uploaded) plugins now run with a minimal, allowlisted worker environment instead of inheriting the host process environment, so a plugin can no longer read host secrets (database/Redis credentials, the API master key and pepper, `DOCKER_HOST`) out of `process.env`. (#431)
+
+### Fixed
+
+- Webhook delivery no longer POSTs an empty (`undefined`) body when a `webhook:before` plugin hook returns a result without a `payload` key — it now falls back to the original payload. (#434)
+- The `session.qr` WebSocket event is now actually emitted from the QR callback, so the dashboard can render the QR live instead of only polling `GET /qr`. (#434)
+- Storage usage now reports real S3 object sizes instead of a 100KB-per-file estimate, and local file writes no longer block the event loop during an import. (#434)
+- A sandboxed plugin whose `load`/`onEnable`/`onDisable` hangs no longer blocks the enable/disable request (and the request behind it) indefinitely — plugin lifecycle calls are now time-bounded, and a disable always tears the worker down even if `onDisable` fails, so a misbehaving plugin can't leak its worker thread. (#431)
+- Sandboxed plugins now receive `onConfigChange` (config updates reach the worker instead of being silently ignored until disable + re-enable) and have their real `healthCheck` run — `GET /plugins/:id/health` previously always returned the default "healthy" for sandboxed plugins. (#430)
+- Plugin `onDisable` now runs on graceful shutdown (`OnModuleDestroy`), so stateful plugins can flush buffers / close connections / persist state instead of losing in-flight work on every restart or deploy. (#430)
+- A concurrent enable of the same plugin no longer double-runs `onEnable` or double-registers its hooks (a synchronous in-progress lock rejects the racing call). (#430)
+- Plugin storage writes — `ctx.storage.set()` and the plugin registry — are now atomic (write to a temp file then rename), so a crash mid-write can't leave a truncated file that silently degrades to lost state. (#430)
+
+### Changed
+
+- The plugin-management UI strings (install/uninstall, the status rail, and the install modal) are now translated into every locale instead of falling back to English. (#429)
+
+## [0.6.1] - 2026-06-22
+
+A patch closing a plugin-hook gap.
+
+### Fixed
+
+- The `message:ack` hook event was declared in the `HookEvent` union but never emitted, so a plugin registered for it (e.g. a delivery-status logger) silently never fired. It now fires for every delivery/read receipt with `{ messageId, status, ack }` (`source: 'Engine'`, scoped to the session), consistent with `message:received`/`message:sent`. Delivery failures surface as `message:ack` with `status: 'failed'`; the send-time `message:failed` hook is unchanged.
+
+## [0.6.0] - 2026-06-22
+
+The **plugin platform** release: untrusted plugins now run sandboxed, and you can install and uninstall them from the dashboard. One breaking change for plugin authors (the sandbox context), so this is a minor bump.
+
+### Added
+
+- **Install and uninstall plugins from the dashboard.** Upload a plugin packaged as a `.zip` (`POST /api/plugins/install`) and remove it (`DELETE /api/plugins/:id`). The Plugins page is redesigned into a status rail — the active engine + library version, enabled/installed counts, and the live list of active plugins — alongside a catalog with an Install button and a per-plugin Uninstall. Uploaded packages are validated (manifest, safe id, zip-slip + size guards), only `extension` plugins are installable (engines and other tiers stay built-in), and built-ins cannot be uninstalled.
+
+### Changed
+
+- ⚠️ **Breaking (plugin authors):** plugins loaded from the `plugins/` directory now run sandboxed in an isolated worker thread instead of in-process. Their context is curated to `messages`, `engine`, `storage`, `logger`, `config`, `pluginId`, and `registerHook`, with capability calls permission-checked on the host — a sandboxed plugin can no longer reach the host `hookManager` directly or share host objects. Bundled/built-in plugins (engines, auto-reply, translation) are unaffected and still run in-process. See `docs/23-plugin-sandboxing.md` for the trust model and the boundary's limits.
+- Engines are now single-active: enabling an engine other than the configured `engine.type` is rejected (switch engines in settings, then restart). The dashboard shows the active engine as **Active** and the others as **Available**, fixing the state where two engines could appear active at once.
+- Calmer plugin cards — the loud gradient, type-colored card headers are replaced with clean cards and a subtle type-tinted icon.
+
+### Fixed
+
 - Plugins page: the "Active" state and the Enable/Activate actions were all the same green and hard to tell apart. Actions are now a solid green button and the current state a neutral chip. (#417)
+- The dashboard reports each plugin's real built-in status (previously only the WhatsApp Web.js engine was flagged built-in).
+- The appearance/theme popover no longer spills outside the sidebar onto the page. (#424)
 
 ## [0.5.1] - 2026-06-22
 
