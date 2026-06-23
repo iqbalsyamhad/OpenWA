@@ -298,6 +298,27 @@ describe('WebhookService', () => {
       timeoutSpy.mockRestore();
     });
 
+    it('falls back to the original payload when a before-hook omits payload (no undefined body)', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // A misbehaving plugin returns continue:true but no `payload` key on the result.
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: { sessionId: 'sess-1', event: 'message.received' },
+      });
+
+      await service.dispatch('sess-1', 'message.received', { from: '628123456789@c.us' });
+
+      expect(mockFetch).toHaveBeenCalled();
+      const callArgs = mockFetch.mock.calls[0] as [unknown, { body: string }];
+      const body = JSON.parse(callArgs[1].body) as WebhookPayload;
+      expect(body).not.toBeUndefined();
+      expect(body.event).toBe('message.received');
+      expect(body.data).toEqual({ from: '628123456789@c.us' });
+    });
+
     it('test() probes the receiver using the configured WEBHOOK_TIMEOUT', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
@@ -355,6 +376,23 @@ describe('WebhookService', () => {
       await service.dispatch('sess-1', 'message.received', {});
 
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dispatch (queued mode) — serialization safety', () => {
+    it('catches an unserializable webhook:before payload instead of aborting the loop / rejecting', async () => {
+      (service as unknown as { queueEnabled: boolean }).queueEnabled = true;
+      // A plugin's webhook:before returns a payload JSON.stringify cannot serialize (BigInt). With the
+      // secret set, the queued branch signs JSON.stringify(finalPayload) — which throws.
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: { payload: { x: 1n } } });
+      const webhook = createMockWebhook({ secret: 'sek', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+
+      // Must NOT reject (the loop/dispatch promise stays settled); the throw is caught + logged.
+      await expect(service.dispatch('sess-1', 'message.received', { ok: true })).resolves.toBeUndefined();
+
+      expect(webhookQueue.add).not.toHaveBeenCalled(); // never enqueued the un-signable job
+      expect(hookManager.execute).toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
     });
   });
 

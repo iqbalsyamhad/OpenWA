@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as qrcode from 'qrcode';
 import type * as BaileysLib from '@whiskeysockets/baileys';
@@ -40,7 +41,13 @@ import { MessageNotFoundError } from '../../common/errors/message-not-found.erro
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
-import { capInboundMedia } from './inbound-media-cap';
+import {
+  capInboundMedia,
+  inboundMediaConcurrency,
+  inboundMediaMaxBytes,
+  coerceDeclaredSize,
+} from './inbound-media-cap';
+import { ConcurrencyLimiter } from './concurrency-limiter';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). */
 const BAILEYS_BROWSER: [string, string, string] = ['OpenWA', 'Chrome', '120.0.0'];
@@ -103,6 +110,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
 
   private readonly logger = createLogger('BaileysAdapter');
+  // Bound concurrent inbound media downloads: each materialises a full decrypted buffer in heap, so an
+  // unbounded fire-and-forget loop lets a sender flood the gateway with N parallel multi-MB allocations.
+  private readonly inboundLimiter = new ConcurrencyLimiter(inboundMediaConcurrency());
   private readonly authPath: string;
   private readonly sessionStore: BaileysSessionStore;
   private sock: WASocket | null = null;
@@ -305,8 +315,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
       }
 
       if (statusCode === this.lib?.DisconnectReason.loggedOut) {
-        // Credentials invalidated — terminal. Re-linking requires a fresh QR/pairing.
+        // Credentials invalidated — terminal. Re-linking requires a fresh QR/pairing, so the now-dead
+        // multi-file auth dir MUST be wiped: otherwise the next connect() reloads the stale creds and
+        // Baileys silently retries them instead of emitting a new QR, leaving the session stuck (no QR).
         this.setStatus(EngineStatus.DISCONNECTED);
+        this.sock = null;
+        void this.clearAuthState();
         this.callbacks.onDisconnected?.('logged out');
         return;
       }
@@ -381,8 +395,25 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.sock = null;
     this.setStatus(EngineStatus.DISCONNECTED);
     await this.config.messageStore?.clearSession(this.config.sessionId).catch(() => undefined);
-    // leaves the multi-file auth dir on disk; a fresh link overwrites it. Add fs cleanup if
-    // stale creds ever block re-linking.
+    // Wipe the multi-file auth dir so a fresh link starts clean — stale creds would otherwise be
+    // reloaded on the next connect() and block re-linking (Baileys retries them, no QR emitted).
+    await this.clearAuthState();
+  }
+
+  /**
+   * Delete this session's on-disk multi-file auth state (`authDir/sessionId`). Required after a terminal
+   * logout: Baileys would otherwise reload the now-invalid creds on the next connect() and retry them
+   * instead of emitting a fresh QR, leaving re-linking stuck. `force` makes a missing dir a no-op.
+   */
+  private async clearAuthState(): Promise<void> {
+    try {
+      await fs.promises.rm(this.authPath, { recursive: true, force: true });
+      this.logger.log('Cleared Baileys auth state', { authPath: this.authPath });
+    } catch (err) {
+      this.logger.warn('Failed to clear Baileys auth state', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   destroy(): Promise<void> {
@@ -688,6 +719,19 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return true;
   }
 
+  async markUnread(chatId: string): Promise<boolean> {
+    this.ensureReady();
+    const last = this.sessionStore.lastMessage(chatId);
+    if (!last) {
+      return false; // Baileys' unread toggle needs the last message; can't synthesize it
+    }
+    await this.sock!.chatModify(
+      { markRead: false, lastMessages: [{ key: last.key, messageTimestamp: last.timestamp }] },
+      chatId,
+    );
+    return true;
+  }
+
   async deleteChat(chatId: string): Promise<boolean> {
     this.ensureReady();
     const last = this.sessionStore.lastMessage(chatId);
@@ -786,7 +830,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
       if (!msg.message || !msg.key?.remoteJid) {
         continue; // protocol/empty messages carry no neutral content
       }
-      void this.processInboundMessage(msg);
+      // Throttle through the limiter so a burst of media messages can't run unbounded parallel
+      // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
+      // keeps the newest by timestamp — and none are dropped (the limiter queues the overflow).
+      void this.inboundLimiter.run(() => this.processInboundMessage(msg));
     }
   }
 
@@ -890,6 +937,37 @@ export class BaileysAdapter implements IWhatsAppEngine {
     }
   }
 
+  /**
+   * Download inbound media via a stream, accumulating chunks but ABORTING (destroy + discard) once the
+   * running total exceeds `maxBytes`. Returns null on abort. Uses `downloadMediaMessage(..., 'stream')`
+   * (not the raw `downloadContentFromMessage`) so the library's expired-media re-upload retry is kept;
+   * for under-cap media the concatenated buffer is byte-identical to the 'buffer' mode it replaces.
+   */
+  private async downloadInboundMediaCapped(msg: WAMessage, maxBytes: number): Promise<Buffer | null> {
+    const b = await this.loadLib();
+    const stream = (await b.downloadMediaMessage(
+      msg,
+      'stream',
+      {},
+      {
+        logger: createSilentLogger(),
+        reuploadRequest: this.sock!.updateMediaMessage,
+      },
+    )) as AsyncIterable<Buffer> & { destroy?: () => void };
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of stream) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        stream.destroy?.();
+        return null;
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
   private async mapMessage(msg: WAMessage, contentType: string | undefined): Promise<IncomingMessage> {
     const b = await this.loadLib();
     const content = msg.message ?? {};
@@ -929,46 +1007,54 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contentType === 'documentWithCaptionMessage' ||
       contentType === 'stickerMessage';
     if (isMediaType) {
-      try {
-        const buf = await b.downloadMediaMessage(
-          msg,
-          'buffer',
-          {},
-          {
-            logger: createSilentLogger(),
-            reuploadRequest: this.sock!.updateMediaMessage,
-          },
-        );
-        // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage /
-        // ephemeralMessage wrappers so we always reach the inner media sub-message.
-        const normalizedContent = b.normalizeMessageContent(content) ?? content;
-        const subMessage =
-          normalizedContent.imageMessage ??
-          normalizedContent.videoMessage ??
-          normalizedContent.audioMessage ??
-          normalizedContent.documentMessage ??
-          normalizedContent.stickerMessage;
-        const mimetype = subMessage?.mimetype ?? '';
-        const filename = normalizedContent.documentMessage?.fileName ?? undefined;
-        // Cap inbound media (lazy base64) so an oversized blob from an untrusted sender is never
-        // encoded/persisted/webhooked/broadcast — preventing heap blow-up. Envelope is kept.
-        media = capInboundMedia({
-          mimetype,
-          filename,
-          sizeBytes: buf.byteLength,
-          toBase64: () => buf.toString('base64'),
+      // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
+      // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
+      const normalizedContent = b.normalizeMessageContent(content) ?? content;
+      const subMessage =
+        normalizedContent.imageMessage ??
+        normalizedContent.videoMessage ??
+        normalizedContent.audioMessage ??
+        normalizedContent.documentMessage ??
+        normalizedContent.stickerMessage;
+      const mimetype = subMessage?.mimetype ?? '';
+      const filename = normalizedContent.documentMessage?.fileName ?? undefined;
+      const maxBytes = inboundMediaMaxBytes();
+      const declared = coerceDeclaredSize(subMessage?.fileLength);
+
+      if (declared > maxBytes) {
+        // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
+        // (Baileys integrity-checks content against the declared size, so this is a robust bound).
+        media = { mimetype, filename, omitted: true, sizeBytes: declared };
+        this.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
+          msgId: msg.key.id,
+          sizeBytes: declared,
         });
-        if (media.omitted) {
-          this.logger.warn('Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope', {
+      } else {
+        try {
+          // Stream-download with a running-total abort so a sender who understates fileLength still
+          // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
+          const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
+          if (buf === null) {
+            media = { mimetype, filename, omitted: true, sizeBytes: maxBytes };
+            this.logger.warn('Inbound media exceeded MEDIA_DOWNLOAD_MAX_BYTES mid-download; aborted', {
+              msgId: msg.key.id,
+            });
+          } else {
+            // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
+            // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
+            media = capInboundMedia({
+              mimetype,
+              filename,
+              sizeBytes: buf.byteLength,
+              toBase64: () => buf.toString('base64'),
+            });
+          }
+        } catch (err) {
+          this.logger.debug('Failed to download inbound media; emitting message without media', {
+            error: err instanceof Error ? err.message : String(err),
             msgId: msg.key.id,
-            sizeBytes: media.sizeBytes,
           });
         }
-      } catch (err) {
-        this.logger.debug('Failed to download inbound media; emitting message without media', {
-          error: err instanceof Error ? err.message : String(err),
-          msgId: msg.key.id,
-        });
       }
     }
 

@@ -463,6 +463,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
         void this.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
 
+        // Push the QR to subscribed dashboard clients over the WebSocket (the `session.qr` event is
+        // advertised + consumed there, so clients can render it live instead of polling GET /qr).
+        this.eventsGateway.emitQRCode(id, qr);
+
         // Execute hook for QR event
         void this.hookManager.execute(
           'session:qr',
@@ -537,7 +541,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           })
           .then(async ({ continue: shouldContinue, data: finalMessage }) => {
             if (!shouldContinue) {
-              // Plugin stopped processing (e.g., auto-reply handled it)
+              // A plugin handled the event and asked to stop the chain (continue: false).
               return;
             }
 
@@ -713,6 +717,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             ack: deliveryStatusToAck(status),
           });
         }
+
+        // Notify plugins of the delivery/read receipt. The `message:ack` hook event was declared in
+        // the HookEvent union but never emitted, so any plugin registered for it silently never fired.
+        // Fire-and-forget: an ack is a notification with nothing downstream to cancel, so the hook's
+        // `continue` flag is moot. Delivery failures surface here as status `failed` — `message:failed`
+        // stays reserved for send-time send failures, which carry a distinct `{ error, input }` payload.
+        void this.hookManager.execute(
+          'message:ack',
+          { messageId, status, ack: deliveryStatusToAck(status) },
+          { sessionId: id, source: 'Engine' },
+        );
       },
       onMessageRevoked: (message): void => {
         if (!this.isLiveEngine(id, engine)) return;
@@ -1112,6 +1127,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return engine.sendSeen(chatId);
   }
 
+  async markUnread(id: string, chatId: string): Promise<boolean> {
+    await this.findOne(id); // Verify session exists
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    return engine.markUnread(chatId);
+  }
+
   async deleteChat(id: string, chatId: string): Promise<boolean> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
@@ -1155,7 +1181,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Get overall session statistics for multi-session monitoring
    */
-  async getStats(): Promise<{
+  async getStats(allowedSessions?: string[] | null): Promise<{
     total: number;
     active: number;
     ready: number;
@@ -1163,7 +1189,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    const sessions = await this.findAll();
+    // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
+    // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
+    const scope = allowedSessions && allowedSessions.length > 0 ? allowedSessions : null;
+    const sessions = await this.findAll(scope);
     const byStatus: Record<string, number> = {};
 
     for (const session of sessions) {
@@ -1174,7 +1203,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     return {
       total: sessions.length,
-      active: this.engines.size,
+      // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
+      active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,
       disconnected: byStatus[SessionStatus.DISCONNECTED] || 0,
       byStatus,
