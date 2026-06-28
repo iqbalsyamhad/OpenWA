@@ -131,7 +131,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
-  ) {}
+  ) { }
 
   /**
    * On backend startup, reset all active session statuses to disconnected
@@ -643,9 +643,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
 
-            void this.messageRepository.save(dbMessage).catch(err => {
-              this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
-            });
+            // Only persist incoming messages; outgoing ones are already persisted by the send path (see onMessageCreate). This avoids double-persisting sends composed on a linked phone, which also fire onMessage.
+            if (!incoming.fromMe) {
+              void this.messageRepository.save(dbMessage).catch(err => {
+                this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
+              });
+            }
 
             // Dispatch to webhooks with potentially modified message
             void this.webhookService.dispatch(id, 'message.received', finalMessage);
@@ -704,6 +707,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // de-dup and is tracked as a separate enhancement; until then this path only webhooks/
             // emits. So local message history reflects API sends + all inbound, but not sends
             // composed on a linked phone.
+
+            // DIY patch, add outgoing save messages repository here so direct outgoing messages are persisted to the database (#220). This is a best-effort save: if the message was already saved by the send path, this will be a no-op (duplicate waMessageId). If it wasn't, this will save it for the dashboard to render.
+            const metadata: Record<string, unknown> = {};
+            if (finalMessage.media) {
+              metadata.media = finalMessage.media;
+            }
+            if (finalMessage.quotedMessage) {
+              metadata.quotedMessage = finalMessage.quotedMessage;
+            }
+
+            const dbMessage = this.messageRepository.create({
+              sessionId: id,
+              waMessageId: finalMessage.id,
+              chatId: finalMessage.chatId,
+              from: finalMessage.from,
+              to: finalMessage.to,
+              body: finalMessage.body,
+              type: finalMessage.type,
+              direction: MessageDirection.OUTGOING,
+              timestamp: finalMessage.timestamp,
+              status: MessageStatus.SENT,
+              metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+            });
+
+            void this.messageRepository.save(dbMessage).catch(err => {
+              this.logger.error(`Failed to save outgoing message ${finalMessage.id} to database`, String(err));
+            });
+
             void this.webhookService.dispatch(id, 'message.sent', finalMessage);
             // Emit real-time event to WebSocket clients (as message.sent, not message.received)
             this.eventsGateway.emitMessageSent(id, finalMessage);
