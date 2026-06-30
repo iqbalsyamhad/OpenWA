@@ -643,12 +643,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
 
-            // Only persist incoming messages; outgoing ones are already persisted by the send path (see onMessageCreate). This avoids double-persisting sends composed on a linked phone, which also fire onMessage.
-            if (!incoming.fromMe) {
-              void this.messageRepository.save(dbMessage).catch(err => {
-                this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
-              });
-            }
+            void this.messageRepository.save(dbMessage).catch(err => {
+              this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
+            });
 
             // Dispatch to webhooks with potentially modified message
             void this.webhookService.dispatch(id, 'message.received', finalMessage);
@@ -731,9 +728,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
 
-            void this.messageRepository.save(dbMessage).catch(err => {
-              this.logger.error(`Failed to save outgoing message ${finalMessage.id} to database`, String(err));
-            });
+            // avoid duplicate waMessageId
+            const saveMessage = async () => {
+              try {
+                await this.messageRepository.save(dbMessage);
+              } catch (err) {
+                this.logger.warn(`Failed to save outgoing message ${finalMessage.id} to database`, String(err));
+              }
+            };
+
+            void saveMessage();
 
             void this.webhookService.dispatch(id, 'message.sent', finalMessage);
             // Emit real-time event to WebSocket clients (as message.sent, not message.received)
