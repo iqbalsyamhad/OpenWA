@@ -2,30 +2,6 @@
 # Smart Orchestration with Profiles
 
 services:
-  # ===== CORE: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
-  docker-proxy:
-    image: tecnativa/docker-socket-proxy
-    container_name: openwa-docker-proxy
-    restart: unless-stopped
-    # Only on the isolated internal network — reachable solely by openwa-api, NOT the
-    # dashboard or any other peer (finding H6). `internal: true` also denies the proxy
-    # outbound access; it only needs the locally-mounted docker socket.
-    networks:
-      - internal-docker
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      CONTAINERS: 1
-      IMAGES: 1
-      VOLUMES: 1
-      INFO: 1
-      PING: 1
-      POST: 1
-      DELETE: 1
-      # Everything else is denied by default (AUTH, SECRETS, NETWORKS, PLUGINS, SWARM, TASKS, SERVICES, CONFIGS, NODES, DISTRIBUTIONS)
-    labels:
-      - 'com.openwa.service=docker-proxy'
-      - 'com.openwa.core=true'
 
   # ===== CORE: OpenWA Backend API =====
   openwa-api:
@@ -189,28 +165,6 @@ services:
       - 'com.openwa.service=database'
       - 'com.openwa.builtin=true'
 
-  # ===== OPTIONAL: Built-in Redis =====
-  redis:
-    image: redis:7-alpine
-    container_name: openwa-redis
-    profiles: ['redis', 'full']
-    restart: unless-stopped
-    networks:
-      - openwa-network
-    security_opt:
-      - 'no-new-privileges:true'
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    labels:
-      - 'com.openwa.service=cache'
-      - 'com.openwa.builtin=true'
-
   # ===== OPTIONAL: Built-in MinIO (S3-compatible) =====
   minio:
     image: minio/minio
@@ -246,8 +200,6 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-  redis-data:
-    driver: local
   minio-data:
     driver: local
 
@@ -256,8 +208,3 @@ networks:
   # docker.service.ts attaches orchestrated containers to it by literal name.
   openwa-network:
     name: openwa-network
-  # Isolated network for the Docker socket proxy. `internal: true` means no external
-  # connectivity; only openwa-api joins it, so nothing else can reach docker-proxy:2375.
-  internal-docker:
-    name: openwa-internal-docker
-    internal: true
