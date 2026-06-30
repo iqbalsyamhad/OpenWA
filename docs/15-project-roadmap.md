@@ -67,6 +67,9 @@ timeline
 | v0.2.10 | Dashboard/CI follow-ups (MessageTester JID, neutral MessageType, qemu v4) | ✅ Released |
 | v0.3.0  | Engine pluggability (Baileys engine, plugin layer)                              | ✅ Released |
 | v0.4.0  | Single-port deployment (dashboard on API port, Traefik removed)                 | ✅ Released |
+| v0.5.x  | Plugin/dashboard hardening and SDK/docs increments                              | ✅ Released |
+| v0.6.x  | Operational hardening, API surface refinements, dashboard follow-ups            | ✅ Released |
+| v0.7.x  | Dashboard chat UX, infra backup/restore, media-download toggle, infra follow-ups | ✅ Released |
 | v1.0.0  | Enterprise Ready (K8s Operator, multi-tenant)                                   | 📋 Planned  |
 
 > SDK / docs-site / observability features (Node & Python SDK, Postman collection, Grafana, OpenTelemetry)
@@ -313,7 +316,7 @@ gantt
     Message queue               :p2-18, after p2-17, 2d
 
     section Dashboard (Week 8-10)
-    React + shadcn/ui setup     :p2-19, after p2-18, 3d
+    React + bespoke-CSS setup   :p2-19, after p2-18, 3d
     Authentication UI           :p2-20, after p2-19, 3d
     Session management          :p2-21, after p2-20, 4d
     QR code display             :p2-22, after p2-21, 2d
@@ -459,8 +462,8 @@ gantt
 
 | Feature            | Priority | Status |
 | ------------------ | -------- | ------ |
-| Horizontal scaling | P2       | ✅     |
-| Session affinity   | P2       | ✅     |
+| Horizontal scaling | P2       | 📄 Design reference only; single active owner per session remains required |
+| Session affinity   | P2       | 📄 Documented for future topology, not implemented as multi-replica runtime |
 | Security audit     | P0       | ✅     |
 
 #### Community & Tooling
@@ -491,7 +494,7 @@ v0.1.0 Release Package:
 ## 15.6 Future Roadmap (v0.3.0+)
 
 > **Note:** Version 0.1.0 is the initial stable release including all features from Phases 1-3.
-> Versions 0.1.7 through 0.4.6 have since shipped (see the CHANGELOG); v1.0.0
+> Versions 0.1.7 through 0.7.8 have since shipped (see the CHANGELOG); v1.0.0
 > onward is forward-looking.
 
 ```mermaid
@@ -550,26 +553,27 @@ vars are removed. Ships with a migration guide.
 
 #### Incremental themes — SDK, Developer Tools & Observability
 
-Delivered additively whenever ready (so they land in `0.2.x`/`0.3.x` per SemVer, not gated to one version):
+Delivered additively whenever ready, per SemVer (not gated to one version). The client SDKs and Prometheus metrics have **shipped** (v0.7.x); the rest remain open.
 
-| Feature                | Priority | Description                     |
-| ---------------------- | -------- | ------------------------------- |
-| JavaScript/Node.js SDK | P1       | Official client library         |
-| Python SDK             | P2       | Python client library           |
-| Docs Site              | P1       | Documentation website           |
-| Postman Collection     | P1       | Ready-to-use API collection     |
-| Video Tutorials        | P2       | Getting started video series    |
-| Example Projects       | P1       | Real-world integration examples |
+| Feature                | Priority | Status | Description                     |
+| ---------------------- | -------- | ------ | ------------------------------- |
+| JavaScript/Node.js SDK | P1       | ✅ Shipped (`@rmyndharis/openwa`) | Official client library |
+| Python SDK             | P2       | ✅ Shipped (`rmyndharis-openwa`) | Python client library |
+| PHP SDK                | P2       | ✅ Shipped (`rmyndharis/openwa`) | PHP client library |
+| Postman Collection     | P1       | ◐ cURL collection (doc 07); Postman export TBD | Ready-to-use API collection |
+| Docs Site              | P1       | ☐ Open | Documentation website |
+| Video Tutorials        | P2       | ☐ Open | Getting started video series    |
+| Example Projects       | P1       | ◐ A few under `docs/examples/` | Real-world integration examples |
 
 **Performance & Observability**
 
-| Feature                | Priority | Description                      |
-| ---------------------- | -------- | -------------------------------- |
-| Prometheus Metrics     | P1       | /metrics endpoint for monitoring |
-| Grafana Dashboard      | P2       | Pre-built monitoring dashboard   |
-| OpenTelemetry Tracing  | P2       | Distributed tracing support      |
-| Performance Benchmarks | P1       | Documented performance metrics   |
-| Memory Optimization    | P1       | Reduced memory per session       |
+| Feature                | Priority | Status | Description                      |
+| ---------------------- | -------- | ------ | -------------------------------- |
+| Prometheus Metrics     | P1       | ✅ Shipped (`GET /api/metrics`, `openwa_*`) | /metrics endpoint for monitoring |
+| Grafana Dashboard      | P2       | ☐ Open | Pre-built monitoring dashboard   |
+| OpenTelemetry Tracing  | P2       | ☐ Open | Distributed tracing support      |
+| Performance Benchmarks | P1       | ☐ Open | Documented performance metrics   |
+| Memory Optimization    | P1       | ☐ Open | Reduced memory per session       |
 
 ### v1.0.0 - Enterprise Ready
 
@@ -658,7 +662,7 @@ flowchart TB
 | Dashboard functional  | All features | ✅ Achieved       | Internal |
 | PostgreSQL stable     | ✅           | ✅ Achieved       | Internal |
 | Webhook delivery rate | > 99%        | ✅ Achieved       | Internal |
-| Test coverage         | > 70%        | ⚠️ ~5% (deferred) | Internal |
+| Test coverage         | > 70%        | ⚠️ 66.87% line coverage; 80% improvement plan active | Internal |
 | GitHub stars          | 100+         | 📋 Pending        | External |
 
 ### Phase 3 Success Criteria
@@ -667,7 +671,7 @@ flowchart TB
 | ----------------------------- | ------- | ----------------- | -------- |
 | Feature parity with WAHA Plus | 90%+    | ✅ Achieved       | Internal |
 | API response time (p95)       | < 200ms | ✅ Achieved       | Internal |
-| Test coverage                 | > 80%   | ⚠️ ~5% (deferred) | Internal |
+| Test coverage                 | > 80%   | ⚠️ 66.87% line coverage; in progress | Internal |
 | Documentation coverage        | 100%    | ✅ 95%+           | Internal |
 | Production users              | 50+     | 📋 Pending        | External |
 | GitHub stars                  | 500+    | 📋 Pending        | External |

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter, Skull } from 'lucide-react';
 import { sessionApi, type Session } from '../services/api';
+import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -14,6 +16,7 @@ export function Sessions() {
   useDocumentTitle(t('sessions.title'));
   const toast = useToast();
   const { canWrite } = useRole();
+  const queryClient = useQueryClient();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +35,14 @@ export function Sessions() {
       setLoading(true);
       const data = await sessionApi.list();
       setSessions(data);
+      // Keep the shared React Query cache (read by the Dashboard via useSessionsQuery /
+      // useSessionStatsQuery) in sync after this page's mutations reload local state — otherwise the
+      // Dashboard shows stale session counts/status. This runs on every reload (mount / WS-failed /
+      // mutation), which is harmless: the Sessions page holds no active observer on a ['sessions', …]
+      // query, so invalidation only marks the shared cache stale (no refetch here, no loop) and the
+      // Dashboard/other views refetch lazily on next mount. Prefix-matches every session-scoped key
+      // (sessions, sessionStats, per-session groups/chats/templates).
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
       return data;
     } catch (err) {
       setError(err instanceof Error ? err.message : t('sessions.create.errorDefault'));
@@ -39,14 +50,28 @@ export function Sessions() {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, queryClient]);
+
+  // Mirror the latest sessions in a ref so the WS handler can compare against the current status without
+  // depending on `sessions` (which would churn the callback identity and re-subscribe the socket). Kept
+  // in sync with every state update (fetch / create / delete / WS) via the effect below.
+  const sessionsRef = useRef<Session[]>([]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   const { isConnected, subscribe } = useWebSocket({
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
-        setSessions(prev =>
-          prev.map(s => (s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s)),
+        const prev = sessionsRef.current.find(s => s.id === event.sessionId);
+        // Some engines double-signal one transition; only react to an ACTUAL status change so the toast
+        // and the failed-refresh don't fire on every redundant envelope. Update the ref synchronously so
+        // a duplicate arriving in the same tick (before the sync effect runs) is also caught.
+        if (prev && prev.status === event.status) return;
+        sessionsRef.current = sessionsRef.current.map(s =>
+          s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s,
         );
+        setSessions(sessionsRef.current);
         if (event.status === 'ready') {
           toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
         } else if (event.status === 'disconnected') {
@@ -78,8 +103,10 @@ export function Sessions() {
   const currentSessionName = useRef<string>('');
 
   const fetchQR = useCallback(async (sessionId: string) => {
-    // Guard: if session is already connected, stop polling immediately.
-    const currentSession = sessions.find(s => s.id === sessionId);
+    // Guard: if session is already connected, stop polling immediately. Read the ref (not `sessions`)
+    // so fetchQR keeps a stable identity — otherwise the polling interval is torn down and restarted on
+    // every sessions update.
+    const currentSession = sessionsRef.current.find(s => s.id === sessionId);
     if (currentSession?.status === 'ready') {
       setQrData(null);
       currentSessionName.current = '';
@@ -105,7 +132,7 @@ export function Sessions() {
         fetchSessions();
       }
     }
-  }, [sessions]);
+  }, [fetchSessions]);
 
   useEffect(() => {
     if (qrData) {

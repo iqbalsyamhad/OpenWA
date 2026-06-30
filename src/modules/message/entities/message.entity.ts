@@ -36,13 +36,14 @@ export enum MessageStatus {
 @Index(['chatId'])
 // Composite index for the ack-driven status UPDATE (scoped by sessionId + waMessageId).
 // Without it every ack does a full table scan of a hot table.
-@Index(['sessionId', 'waMessageId'])
+@Index('UQ_messages_sessionId_waMessageId', ['sessionId', 'waMessageId'], { unique: true })
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  // No standalone @Index here: sessionId-only lookups are already served by the composite indexes
+  // that lead with sessionId — (sessionId, createdAt) above and the unique (sessionId, waMessageId).
   @Column()
-  @Index()
   sessionId: string;
 
   @Column({ nullable: true })
