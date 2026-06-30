@@ -9,8 +9,7 @@ import { CacheService } from '../../common/cache';
  * SQL for the time-series timestamp bucket, per DB dialect. SQLite has strftime(); Postgres has
  * neither strftime nor a case-insensitive bare `m.createdAt` (unquoted it folds to lowercase and
  * misses the quoted "createdAt" column) — so it needs to_char() with a quoted column. The hour
- * format yields an identical zero-padded, chronologically-sortable label on both engines, so the
- * GROUP BY/ORDER BY on the alias and the downstream map() are unchanged.
+ * format yields an identical zero-padded, chronologically-sortable label on both engines.
  */
 export function timeSeriesTimestampSql(dbType: string, interval: 'hour' | 'day'): string {
   if (dbType === 'postgres') {
@@ -284,13 +283,16 @@ export class StatsService {
   }
 
   private async getTimeSeries(since: Date, interval: 'hour' | 'day'): Promise<TimeSeriesPoint[]> {
+    const timestampSql = timeSeriesTimestampSql(this.dataDbType, interval);
     const raw = await this.messageRepo
       .createQueryBuilder('m')
-      .select(timeSeriesTimestampSql(this.dataDbType, interval), 'timestamp')
+      .select(timestampSql, 'timestamp')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.createdAt >= :since', { since })
-      .groupBy('timestamp')
+      // PostgreSQL resolves GROUP BY timestamp to the messages.timestamp column, not this
+      // query's select alias. Group by the bucket expression explicitly to avoid that collision.
+      .groupBy(timestampSql)
       .orderBy('timestamp', 'ASC')
       .getRawMany<{ timestamp: string; sent: string; received: string }>();
 
