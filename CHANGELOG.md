@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Boot migrations are no longer aborted by the runtime query timeout on PostgreSQL.** The `data` connection sets a `statement_timeout` to bound live queries, and that limit was inherited by the migrations that run at startup — so on a large existing deployment a backfill plus `CREATE UNIQUE INDEX` over the `messages` or `templates` table could exceed it and fail boot. The two affected migrations now lift the timeout for their own transaction (PostgreSQL-only, transaction-scoped via `SET LOCAL`, a no-op on SQLite); the runtime timeout that protects live traffic is unchanged. (#543)
+- **The templates migration revert is idempotent on a synchronize-bootstrapped database.** `AddTemplates` now drops its index and table with `IF EXISTS`, so a `down()` no longer errors when the schema was created by `synchronize` and the migration-only `IDX_templates_sessionId` index was never created. (#543)
 ### Added
 
 - **Inbound @mentions are surfaced on the Baileys engine.** An incoming message that tags participants now exposes the tagged WIDs as `mentionedIds` (normalized to the neutral `@c.us` convention), reaching parity with the whatsapp-web.js engine and feeding the existing `mentions` webhook filter and command-targeting. (#542)
